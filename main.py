@@ -3,7 +3,7 @@ import random
 import numpy as np
 import torch
 import scipy.io.wavfile as wavfile
-from chatterbox.src.chatterbox.tts import ChatterboxTTS
+from chatterbox.tts import ChatterboxTTS
 
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -49,7 +49,6 @@ def generate_tts_audio(
     temperature_input: float = 0.8,
     seed_num_input: int = 0,
     cfgw_input: float = 0.5,
-    vad_trim_input: bool = False,
 ) -> tuple[int, np.ndarray]:
     """
     Generate high-quality speech audio from text using ChatterboxTTS model with optional reference audio styling.
@@ -81,7 +80,6 @@ def generate_tts_audio(
         "exaggeration": exaggeration_input,
         "temperature": temperature_input,
         "cfg_weight": cfgw_input,
-        "vad_trim": vad_trim_input,
     }
 
     if audio_prompt_path_input:
