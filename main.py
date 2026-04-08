@@ -251,10 +251,13 @@ async def conversation(
 
         _voice_defaults = [
             {"exaggeration": 0.5,  "temperature": 0.70, "cfg_weight": 0.5},
-            {"exaggeration": 0.65, "temperature": 0.85, "cfg_weight": 0.6},
+            {"exaggeration": 0.6, "temperature": 0.75, "cfg_weight": 0.6},
         ]
+        
+        voice_defaults = data.get("voice_defaults", _voice_defaults)
+
         speaker_settings = {
-            spk: _voice_defaults[i % len(_voice_defaults)]
+            spk: voice_defaults[i % len(voice_defaults)]
             for i, spk in enumerate(speakers_in_order)
         }
 

@@ -8,6 +8,10 @@
 		{ "speaker": "Clair", "file": "Clair.wav" },
 		{ "speaker": "Christopher", "file": "Christopher.wav" }
 	],
+	"voice_defaults": [
+		{ "exaggeration": 0.5, "temperature": 0.7, "cfg_weight": 0.5 },
+		{ "exaggeration": 0.6, "temperature": 0.75, "cfg_weight": 0.6 }
+	],
 	"segments": [
 		{
 			"speaker": "Clair",
