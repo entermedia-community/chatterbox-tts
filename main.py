@@ -21,6 +21,7 @@ from chatterbox.tts import ChatterboxTTS
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MODEL: Optional[ChatterboxTTS] = None
 
+os.environ["HF_TOKEN"] = os.getenv("HF_TOKEN", "")
 
 # ---------------------------------------------------------------------------
 # Lifespan – model is loaded once on startup and released on shutdown
