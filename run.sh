@@ -18,4 +18,4 @@ exec uvicorn main:app \
   --port "$PORT" \
   --workers "$WORKERS" \
   --log-level "$LOG_LEVEL" \
-  --no-access-log # > /dev/null 2>&1 &
+  --no-access-log > /dev/null 2>&1 &
