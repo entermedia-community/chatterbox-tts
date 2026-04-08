@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import re
 import random
@@ -203,60 +204,72 @@ async def tts(
 
 @app.post("/conversation", tags=["tts"], response_class=StreamingResponse)
 async def conversation(
-    transcript: Optional[str] = Form(None, description="Raw transcript text."),
-    transcript_file: Optional[UploadFile] = File(None, description="Transcript .json file."),
-    silence_ms: int = Form(600, description="Silence between turns in milliseconds."),
-): 
-
-@app.post("/conversation", tags=["tts"], response_class=StreamingResponse)
-async def conversation(
-    transcript: Optional[str] = Form(None, description="Raw transcript text."),
-    transcript_file: Optional[UploadFile] = File(None, description="Transcript .txt file."),
+    transcript_file: UploadFile = File(..., description="Transcript .json file."),
+    speaker_audio_1: UploadFile = File(..., description="Voice WAV for the first speaker."),
+    speaker_audio_2: UploadFile = File(..., description="Voice WAV for the second speaker."),
     silence_ms: int = Form(600, description="Silence between turns in milliseconds."),
 ):
-    """Generate a full two-person conversation from a transcript and return a WAV file.
+    """Generate a full conversation from a JSON transcript and two speaker voice files.
 
-    Supply either 'transcript' (raw text) or 'transcript_file' (uploaded .txt).
-    Speakers are detected automatically. The two voices receive slightly different
-    generation settings so they sound distinguishable.
+    The JSON must contain a 'segments' list (each with 'speaker' and 'content') and
+    an 'audio_prompt' list that defines speaker order (e.g. [{"speaker": "Alice", ...},
+    {"speaker": "Bob", ...}]). speaker_audio_1 maps to the first speaker and
+    speaker_audio_2 to the second.
     """
     _require_model()
 
-    if transcript is None and transcript_file is None:
-        raise HTTPException(
-            status_code=422,
-            detail="Provide either 'transcript' text or a 'transcript_file' upload.",
-        )
+    raw = await transcript_file.read()
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid JSON: {exc}")
 
-    if transcript_file is not None:
-        raw = await transcript_file.read()
-        content = raw.decode("utf-8")
-    else:
-        content = transcript
-
-    segments = _parse_transcript_content(content)
+    segments = data.get("segments")
     if not segments:
-        raise HTTPException(status_code=422, detail="No dialogue turns found in transcript.")
+        raise HTTPException(status_code=422, detail="No 'segments' found in transcript JSON.")
 
-    speakers = list(dict.fromkeys(s["speaker"] for s in segments))
-    _voice_defaults = [
-        {"exaggeration": 0.5,  "temperature": 0.70, "cfg_weight": 0.5},
-        {"exaggeration": 0.65, "temperature": 0.85, "cfg_weight": 0.6},
-    ]
-    speaker_settings = {
-        spk: _voice_defaults[i % len(_voice_defaults)]
-        for i, spk in enumerate(speakers)
-    }
+    # Determine speaker order from the JSON audio_prompt list, falling back to segment order
+    audio_prompt_list = data.get("audio_prompt", [])
+    speakers_in_order = [entry["speaker"] for entry in audio_prompt_list]
+    if not speakers_in_order:
+        speakers_in_order = list(dict.fromkeys(s["speaker"] for s in segments))
 
-    print(f"Speakers: {', '.join(speakers)} | Turns: {len(segments)}")
+    if len(speakers_in_order) < 2:
+        raise HTTPException(status_code=422, detail="At least two speakers are required.")
 
-    sr, audio = await run_in_threadpool(
-        _build_conversation_audio,
-        segments,
-        {},
-        speaker_settings,
-        silence_ms,
-    )
+    tmp_files: list[str] = []
+    try:
+        speaker_audio_prompts: dict[str, str] = {}
+        for speaker, upload in zip(speakers_in_order[:2], [speaker_audio_1, speaker_audio_2]):
+            audio_data = await upload.read()
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+            tmp.write(audio_data)
+            tmp.flush()
+            tmp.close()
+            tmp_files.append(tmp.name)
+            speaker_audio_prompts[speaker] = tmp.name
+
+        _voice_defaults = [
+            {"exaggeration": 0.5,  "temperature": 0.70, "cfg_weight": 0.5},
+            {"exaggeration": 0.65, "temperature": 0.85, "cfg_weight": 0.6},
+        ]
+        speaker_settings = {
+            spk: _voice_defaults[i % len(_voice_defaults)]
+            for i, spk in enumerate(speakers_in_order)
+        }
+
+        print(f"Speakers: {', '.join(speakers_in_order)} | Turns: {len(segments)}")
+
+        sr, audio = await run_in_threadpool(
+            _build_conversation_audio,
+            segments,
+            speaker_audio_prompts,
+            speaker_settings,
+            silence_ms,
+        )
+    finally:
+        for path in tmp_files:
+            os.unlink(path)
 
     return _wav_response(sr, audio)
 
