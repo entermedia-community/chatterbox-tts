@@ -1,0 +1,61 @@
+{
+	"metadata": {
+		"title": "The Future of Business Intelligence with eMedia",
+		"host": "Clair",
+		"guest": "Christopher Burkey, Founder of eMedia"
+	},
+	"audio_prompt": [
+		{ "speaker": "Clair", "file": "Clair.wav" },
+		{ "speaker": "Christopher", "file": "Christopher.wav" }
+	],
+	"segments": [
+		{
+			"speaker": "Clair",
+			"content": "Welcome back. Today we're diving deep into the future of how we run our businesses. I'm here with Christopher Burkey, the mind behind eMedia. Christopher, for those who might not know, can you explain what eMedia is and how it functions as an independent business intelligence platform?"
+		},
+		{
+			"speaker": "Christopher",
+			"content": "Thanks, Clair. You know, 'business intelligence' is a term we've used for years to describe tools that help you run your business. But with eMedia, we're taking that concept and applying it to the 'AI-ification' of your entire operation. The core goal is to give everyone an independent business intelligence system that they can fully control. Unlike generic models, this allows you to differentiate yourself by feeding it your own specific content. It learns what is true based on your human input, not from some secretive, external algorithm trying to tell you what to believe."
+		},
+		{
+			"speaker": "Clair",
+			"content": "That distinction is fascinating. So, instead of a black box telling us what is true, eMedia learns what is true from the data we provide?"
+		},
+		{
+			"speaker": "Christopher",
+			"content": "Exactly. We want to build a system where you gather everything—your history, your company records, your media. It's about creating a universal database where you collect your own truth. Whether it's PDFs, videos, audio, images, or even business records like invoices, you feed that into the system. It then outputs helpful things based on what you actually do and what you've told it."
+		},
+		{
+			"speaker": "Clair",
+			"content": "I love that idea of reducing cognitive load. Often, we have so much information scattered everywhere that it becomes overwhelming. How does eMedia help with that?"
+		},
+		{
+			"speaker": "Christopher",
+			"content": "That's a huge part of it. We've seen people storing all kinds of content, and the goal is to organize it so you don't have to. For example, if you have a course on '30 Days to Social Media Sales,' you can put all that content into a specific section. Then, anyone can chat specifically with that section. It acts like a specialist. You ask, 'Tell me what to do regarding social media sales,' and it gives you directional advice based on that specific content. It breaks things down into subtopics so you aren't sifting through noise; you're getting exactly what you need."
+		},
+		{
+			"speaker": "Clair",
+			"content": "So it's like having a personal assistant that knows your business inside and out because it's been trained on your actual work?"
+		},
+		{
+			"speaker": "Christopher",
+			"content": "Precisely. And it goes beyond just text. We've integrated active listening capabilities. If you upload a video, the system uses AI to build a transcript and even identify which speakers are speaking. It can separate them out and tag them. So, if you have an hour-long video on 'Love-Led Leadership,' people can have a conversation with that video. They can ask, 'What did you say about leadership at the 20-minute mark?' and the system will reference exactly where that information came from."
+		},
+		{
+			"speaker": "Clair",
+			"content": "That is mind-blowing. It essentially turns passive content into an active dialogue. So, if someone watched a video while driving and forgot a detail, they can just ask the system, and it will remember the details and reference the source?"
+		},
+		{
+			"speaker": "Christopher",
+			"content": "Absolutely. It remembers all the details. By turning that audio into text, computers can analyze it deeper. You can ask questions of the video content, collect it with other video content, and get answers that are grounded in your specific data. It's a one-stop shop for all these AI advancements, from facial recognition to translation, all integrated so you don't need separate applications."
+		},
+		{
+			"speaker": "Clair",
+			"content": "It sounds like eMedia is shifting the paradigm from AI models that dictate truth to systems that learn truth from human input, all while organizing our world to reduce the mental burden of managing it."
+		},
+		{
+			"speaker": "Christopher",
+			"content": "That's exactly right. It's about giving you the tools to control your own intelligence and differentiate yourself in a way that is truly yours."
+		}
+	]
+}

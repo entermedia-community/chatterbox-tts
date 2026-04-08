@@ -1,40 +1,57 @@
+import io
+import os
 import re
 import random
+import tempfile
+from contextlib import asynccontextmanager
+from typing import Optional
+
 import numpy as np
-import torch
 import scipy.io.wavfile as wavfile
+import torch
+import uvicorn
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
+from starlette.concurrency import run_in_threadpool
+
 from chatterbox.tts import ChatterboxTTS
 
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-print(f"🚀 Running on device: {DEVICE}")
+MODEL: Optional[ChatterboxTTS] = None
 
-# --- Global Model Initialization ---
-MODEL = None
 
-def get_or_load_model():
-    """Loads the ChatterboxTTS model if it hasn't been loaded already,
-    and ensures it's on the correct device."""
+# ---------------------------------------------------------------------------
+# Lifespan – model is loaded once on startup and released on shutdown
+# ---------------------------------------------------------------------------
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     global MODEL
+    print(f"🚀 Running on device: {DEVICE}")
+    print("Loading ChatterboxTTS model…")
+    MODEL = ChatterboxTTS.from_pretrained(DEVICE)
+    if hasattr(MODEL, "to") and str(MODEL.device) != DEVICE:
+        MODEL.to(DEVICE)
+    print(f"Model ready. Internal device: {getattr(MODEL, 'device', 'N/A')}")
+    yield
+    MODEL = None
+
+
+app = FastAPI(title="ChatterboxTTS API", version="1.0.0", lifespan=lifespan)
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _require_model() -> ChatterboxTTS:
     if MODEL is None:
-        print("Model not loaded, initializing...")
-        try:
-            MODEL = ChatterboxTTS.from_pretrained(DEVICE)
-            if hasattr(MODEL, 'to') and str(MODEL.device) != DEVICE:
-                MODEL.to(DEVICE)
-            print(f"Model loaded successfully. Internal device: {getattr(MODEL, 'device', 'N/A')}")
-        except Exception as e:
-            print(f"Error loading model: {e}")
-            raise
+        raise HTTPException(status_code=503, detail="Model not loaded.")
     return MODEL
 
-try:
-    get_or_load_model()
-except Exception as e:
-    print(f"CRITICAL: Failed to load model on startup. Application may not function. Error: {e}")
 
-def set_seed(seed: int):
-    """Sets the random seed for reproducibility across torch, numpy, and random."""
+def set_seed(seed: int) -> None:
     torch.manual_seed(seed)
     if DEVICE == "cuda":
         torch.cuda.manual_seed(seed)
@@ -42,84 +59,49 @@ def set_seed(seed: int):
     random.seed(seed)
     np.random.seed(seed)
 
-def generate_tts_audio(
-    text_input: str,
-    audio_prompt_path_input: str = None,
-    exaggeration_input: float = 0.5,
-    temperature_input: float = 0.8,
-    seed_num_input: int = 0,
-    cfgw_input: float = 0.5,
+
+def _generate(
+    text: str,
+    audio_prompt_path: Optional[str] = None,
+    exaggeration: float = 0.5,
+    temperature: float = 0.8,
+    seed: int = 0,
+    cfg_weight: float = 0.5,
 ) -> tuple[int, np.ndarray]:
-    """
-    Generate high-quality speech audio from text using ChatterboxTTS model with optional reference audio styling.
-    This tool synthesizes natural-sounding speech from input text. When a reference audio file
-    is provided, it captures the speaker's voice characteristics and speaking style. The generated audio
-    maintains the prosody, tone, and vocal qualities of the reference speaker, or uses default voice if no reference is provided.
-    Args:
-        text_input (str): The text to synthesize into speech (maximum 300 characters)
-        audio_prompt_path_input (str, optional): File path or URL to the reference audio file that defines the target voice style. Defaults to None.
-        exaggeration_input (float, optional): Controls speech expressiveness (0.25-2.0, neutral=0.5, extreme values may be unstable). Defaults to 0.5.
-        temperature_input (float, optional): Controls randomness in generation (0.05-5.0, higher=more varied). Defaults to 0.8.
-        seed_num_input (int, optional): Random seed for reproducible results (0 for random generation). Defaults to 0.
-        cfgw_input (float, optional): CFG/Pace weight controlling generation guidance (0.2-1.0). Defaults to 0.5.
-    Returns:
-        tuple[int, np.ndarray]: A tuple containing the sample rate (int) and the generated audio waveform (numpy.ndarray)
-    """
-    current_model = get_or_load_model()
-
-    if current_model is None:
-        raise RuntimeError("TTS model is not loaded.")
-
-    if seed_num_input != 0:
-        set_seed(int(seed_num_input))
-
-    print(f"Generating audio for text: '{text_input[:50]}...'")
-
-    # Handle optional audio prompt
-    generate_kwargs = {
-        "exaggeration": exaggeration_input,
-        "temperature": temperature_input,
-        "cfg_weight": cfgw_input,
+    model = _require_model()
+    if seed != 0:
+        set_seed(seed)
+    kwargs = {
+        "exaggeration": exaggeration,
+        "temperature": temperature,
+        "cfg_weight": cfg_weight,
     }
-
-    if audio_prompt_path_input:
-        generate_kwargs["audio_prompt_path"] = audio_prompt_path_input
-
-    wav = current_model.generate(
-        text_input[:300],  # Truncate text to max chars
-        **generate_kwargs
-    )
-    print("Audio generation complete.")
-    return (current_model.sr, wav.squeeze(0).numpy())
+    if audio_prompt_path:
+        kwargs["audio_prompt_path"] = audio_prompt_path
+    wav = model.generate(text[:300], **kwargs)
+    return model.sr, wav.squeeze(0).numpy()
 
 
-def parse_transcript(filepath: str) -> list[dict]:
-    """Parse a transcript file into a list of {speaker, text} dicts.
-
-    Lines matching 'Host: ...' or 'Guest: ...' (metadata) are skipped.
-    Multi-line blocks belonging to the same speaker turn are joined.
-    """
-    metadata_keys = {"Host", "Guest"}
-    segments = []
-    with open(filepath, "r") as f:
-        content = f.read()
-
-    # Match "SpeakerName: text" blocks (text can span multiple lines)
-    pattern = re.compile(
-        r'^([A-Z][A-Za-z]*):\s+(.+?)(?=^[A-Z][A-Za-z]*:\s|\Z)',
-        re.MULTILINE | re.DOTALL,
-    )
-    for match in pattern.finditer(content):
-        speaker = match.group(1).strip()
-        text = " ".join(match.group(2).strip().split())  # normalise whitespace
-        if speaker not in metadata_keys and text:
-            segments.append({"speaker": speaker, "text": text})
-    return segments
+def _to_wav_bytes(sample_rate: int, audio: np.ndarray) -> bytes:
+    """Encode a float32 numpy array as 16-bit PCM WAV bytes."""
+    peak = np.abs(audio).max()
+    if peak > 0:
+        audio = audio / peak * 0.9
+    pcm = (audio * 32767).astype(np.int16)
+    buf = io.BytesIO()
+    wavfile.write(buf, sample_rate, pcm)
+    buf.seek(0)
+    return buf.read()
 
 
-def chunk_text(text: str, max_chars: int = 280) -> list[str]:
-    """Split text into chunks of at most max_chars, breaking at sentence endings."""
-    sentences = re.split(r'(?<=[.!?]) +', text)
+def _wav_response(sample_rate: int, audio: np.ndarray) -> StreamingResponse:
+    data = _to_wav_bytes(sample_rate, audio)
+    return StreamingResponse(io.BytesIO(data), media_type="audio/wav")
+
+
+def _chunk_text(text: str, max_chars: int = 280) -> list[str]:
+    """Split text at sentence boundaries so each chunk <= max_chars."""
+    sentences = re.split(r"(?<=[.!?]) +", text)
     chunks: list[str] = []
     current = ""
     for sentence in sentences:
@@ -128,7 +110,6 @@ def chunk_text(text: str, max_chars: int = 280) -> list[str]:
         else:
             if current:
                 chunks.append(current)
-            # Hard-split sentences that are still too long
             while len(sentence) > max_chars:
                 chunks.append(sentence[:max_chars])
                 sentence = sentence[max_chars:]
@@ -138,110 +119,151 @@ def chunk_text(text: str, max_chars: int = 280) -> list[str]:
     return chunks
 
 
-def generate_conversation(
-    transcript_path: str = "transcript.txt",
-    output_path: str = "conversation_output.wav",
-    speaker_audio_prompts: dict = None,
-    speaker_settings: dict = None,
-    silence_between_turns_ms: int = 600,
-) -> str:
-    """Generate a full conversation WAV from a two-person transcript file.
-
-    Each speaker turn is synthesised in order with (optionally) different
-    voice settings per speaker, then all segments are concatenated with
-    short silences between turns and written to output_path.
-
-    Args:
-        transcript_path: Path to the transcript text file.
-        output_path: Destination WAV file path.
-        speaker_audio_prompts: Optional dict mapping speaker name to a
-            reference audio file path for voice cloning, e.g.
-            {"Crystal": "crystal.wav", "Christopher": "chris.wav"}.
-        speaker_settings: Optional dict mapping speaker name to generation
-            kwargs (exaggeration, temperature, cfgw).  Defaults are applied
-            when omitted so the two speakers sound distinguishable.
-        silence_between_turns_ms: Milliseconds of silence inserted between
-            consecutive speaker turns.
-
-    Returns:
-        The path to the saved WAV file.
-    """
-    segments = parse_transcript(transcript_path)
-    if not segments:
-        raise ValueError(f"No dialogue segments found in '{transcript_path}'.")
-
-    # Preserve insertion order so speaker index is deterministic
-    speakers = list(dict.fromkeys(s["speaker"] for s in segments))
-    print(f"Speakers detected: {', '.join(speakers)}")
-
-    # Default per-speaker settings – slightly differentiate the two voices
-    _defaults = [
-        {"exaggeration": 0.5,  "temperature": 0.70, "cfgw": 0.5},
-        {"exaggeration": 0.65, "temperature": 0.85, "cfgw": 0.6},
-    ]
-    if speaker_settings is None:
-        speaker_settings = {
-            spk: _defaults[i % len(_defaults)]
-            for i, spk in enumerate(speakers)
-        }
-
-    if speaker_audio_prompts is None:
-        speaker_audio_prompts = {}
-
-    sample_rate: int | None = None
+def _build_conversation_audio(
+    segments: list[dict],
+    speaker_audio_prompts: dict,
+    speaker_settings: dict,
+    silence_between_turns_ms: int,
+) -> tuple[int, np.ndarray]:
+    sample_rate: Optional[int] = None
     all_audio: list[np.ndarray] = []
 
     for idx, segment in enumerate(segments):
         speaker = segment["speaker"]
-        text = segment["text"]
+        text = segment["content"]
         settings = speaker_settings.get(speaker, {})
         audio_prompt = speaker_audio_prompts.get(speaker)
 
         preview = text[:70] + ("..." if len(text) > 70 else "")
-        print(f"\n[{idx + 1}/{len(segments)}] {speaker}: {preview}")
+        print(f"[{idx + 1}/{len(segments)}] {speaker}: {preview}")
 
-        for chunk in chunk_text(text):
-            sr, audio = generate_tts_audio(
-                text_input=chunk,
-                audio_prompt_path_input=audio_prompt,
-                exaggeration_input=settings.get("exaggeration", 0.5),
-                temperature_input=settings.get("temperature", 0.8),
-                cfgw_input=settings.get("cfgw", 0.5),
+        for chunk in _chunk_text(text):
+            sr, audio = _generate(
+                text=chunk,
+                audio_prompt_path=audio_prompt,
+                exaggeration=settings.get("exaggeration", 0.5),
+                temperature=settings.get("temperature", 0.8),
+                seed=settings.get("seed", 0),
+                cfg_weight=settings.get("cfg_weight", 0.5),
             )
             if sample_rate is None:
                 sample_rate = sr
             all_audio.append(audio.astype(np.float32))
 
-        # Silence gap after each turn
-        silence = np.zeros(int(sample_rate * silence_between_turns_ms / 1000), dtype=np.float32)
+        silence = np.zeros(
+            int(sample_rate * silence_between_turns_ms / 1000), dtype=np.float32
+        )
         all_audio.append(silence)
 
-    conversation_audio = np.concatenate(all_audio)
+    return sample_rate, np.concatenate(all_audio)
 
-    # Normalise to avoid clipping
-    peak = np.abs(conversation_audio).max()
-    if peak > 0:
-        conversation_audio = conversation_audio / peak * 0.9
 
-    audio_int16 = (conversation_audio * 32767).astype(np.int16)
-    wavfile.write(output_path, sample_rate, audio_int16)
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
 
-    duration = len(conversation_audio) / sample_rate
-    print(f"\n✅ Conversation saved to: {output_path}")
-    print(f"   Speakers : {', '.join(speakers)}")
-    print(f"   Turns    : {len(segments)}")
-    print(f"   Duration : {duration:.1f}s")
-    return output_path
+@app.get("/health", tags=["utility"])
+def health():
+    """Return model readiness status."""
+    return {"status": "ok", "model_loaded": MODEL is not None, "device": DEVICE}
 
+
+@app.post("/tts", tags=["tts"], response_class=StreamingResponse)
+async def tts(
+    text: str = Form(..., description="Text to synthesise (max 300 chars)."),
+    exaggeration: float = Form(0.5, description="Expressiveness 0.25-2.0."),
+    temperature: float = Form(0.8, description="Sampling temperature 0.05-5.0."),
+    seed: int = Form(0, description="Random seed; 0 = random."),
+    cfg_weight: float = Form(0.5, description="CFG/pace weight 0.2-1.0."),
+    audio_prompt: Optional[UploadFile] = File(None, description="Optional reference voice WAV."),
+):
+    """Generate speech for a single piece of text and return a WAV file."""
+    _require_model()
+
+    prompt_path: Optional[str] = None
+    tmp_file = None
+
+    try:
+        if audio_prompt is not None:
+            data = await audio_prompt.read()
+            tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+            tmp_file.write(data)
+            tmp_file.flush()
+            tmp_file.close()
+            prompt_path = tmp_file.name
+
+        sr, audio = await run_in_threadpool(
+            _generate, text, prompt_path, exaggeration, temperature, seed, cfg_weight
+        )
+    finally:
+        if tmp_file is not None:
+            os.unlink(tmp_file.name)
+
+    return _wav_response(sr, audio)
+
+@app.post("/conversation", tags=["tts"], response_class=StreamingResponse)
+async def conversation(
+    transcript: Optional[str] = Form(None, description="Raw transcript text."),
+    transcript_file: Optional[UploadFile] = File(None, description="Transcript .json file."),
+    silence_ms: int = Form(600, description="Silence between turns in milliseconds."),
+): 
+
+@app.post("/conversation", tags=["tts"], response_class=StreamingResponse)
+async def conversation(
+    transcript: Optional[str] = Form(None, description="Raw transcript text."),
+    transcript_file: Optional[UploadFile] = File(None, description="Transcript .txt file."),
+    silence_ms: int = Form(600, description="Silence between turns in milliseconds."),
+):
+    """Generate a full two-person conversation from a transcript and return a WAV file.
+
+    Supply either 'transcript' (raw text) or 'transcript_file' (uploaded .txt).
+    Speakers are detected automatically. The two voices receive slightly different
+    generation settings so they sound distinguishable.
+    """
+    _require_model()
+
+    if transcript is None and transcript_file is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Provide either 'transcript' text or a 'transcript_file' upload.",
+        )
+
+    if transcript_file is not None:
+        raw = await transcript_file.read()
+        content = raw.decode("utf-8")
+    else:
+        content = transcript
+
+    segments = _parse_transcript_content(content)
+    if not segments:
+        raise HTTPException(status_code=422, detail="No dialogue turns found in transcript.")
+
+    speakers = list(dict.fromkeys(s["speaker"] for s in segments))
+    _voice_defaults = [
+        {"exaggeration": 0.5,  "temperature": 0.70, "cfg_weight": 0.5},
+        {"exaggeration": 0.65, "temperature": 0.85, "cfg_weight": 0.6},
+    ]
+    speaker_settings = {
+        spk: _voice_defaults[i % len(_voice_defaults)]
+        for i, spk in enumerate(speakers)
+    }
+
+    print(f"Speakers: {', '.join(speakers)} | Turns: {len(segments)}")
+
+    sr, audio = await run_in_threadpool(
+        _build_conversation_audio,
+        segments,
+        {},
+        speaker_settings,
+        silence_ms,
+    )
+
+    return _wav_response(sr, audio)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    # Optionally supply per-speaker reference audio for voice cloning:
-    # speaker_audio_prompts = {
-    #     "Crystal":     "reference_crystal.wav",
-    #     "Christopher": "reference_christopher.wav",
-    # }
-    generate_conversation(
-        transcript_path="transcript.txt",
-        output_path="conversation_output.wav",
-        # speaker_audio_prompts=speaker_audio_prompts,
-    )
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
