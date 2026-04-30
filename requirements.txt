@@ -1,5 +1,6 @@
 numpy
-torch
+torch --index-url https://download.pytorch.org/whl/cu128
+torchaudio --index-url https://download.pytorch.org/whl/cu128
 scipy
 chatterbox-tts
 fastapi

@@ -19,3 +19,5 @@ exec uvicorn main:app \
   --workers "$WORKERS" \
   --log-level "$LOG_LEVEL" \
   --no-access-log > /dev/null 2>&1 &
+
+# CUDA_VISIBLE_DEVICES=1 uvicorn main:app --host 0.0.0.0 --port 3600 --workers 1
