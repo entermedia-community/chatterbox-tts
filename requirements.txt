@@ -1,8 +1,4 @@
-numpy
-torch --index-url https://download.pytorch.org/whl/cu128
-torchaudio --index-url https://download.pytorch.org/whl/cu128
-scipy
-chatterbox-tts
 fastapi
 uvicorn[standard]
 python-multipart
+chatterbox-tts
